@@ -15,15 +15,16 @@ except Exception as exc:
     st.exception(exc)
     st.stop()
 
-if st.button("Start background worker", type="primary"):
-    st.session_state["worker_requested"] = True
 
-if st.session_state.get("worker_requested"):
+if st.button("Start background worker", type="primary"):
     try:
-        start_worker()
-        st.success("Background worker started or is already running.")
+        started = start_worker()
+        if started:
+            st.success("Background worker started.")
+        else:
+            st.info("Background worker is already running.")
     except Exception as exc:
-        st.error("The worker could not start.")
+        st.error("The background worker could not start.")
         st.exception(exc)
 
 
@@ -46,11 +47,11 @@ def show_worker_status() -> None:
     cols = st.columns(4)
     cols[0].metric("Status", row.get("status", "-"))
     cols[1].metric("Heartbeat", str(row.get("heartbeat_at") or "-"))
-    cols[2].metric("Queue depth", row.get("queue_depth", 0))
+    cols[2].metric("Events received", row.get("events_received", 0))
     cols[3].metric("Events committed", row.get("events_committed", 0))
 
     if row.get("last_error"):
-        st.warning(row["last_error"])
+        st.error(row["last_error"])
 
 
 def show_leads() -> None:
@@ -72,7 +73,6 @@ def show_leads() -> None:
 
     df = pd.DataFrame(rows)
     term = st.text_input("Filter company name")
-
     if term:
         df = df[
             df["company_name"].str.contains(
