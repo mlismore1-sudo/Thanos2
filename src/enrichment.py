@@ -1,39 +1,119 @@
 from __future__ import annotations
 
-import hashlib
-import json
-from datetime import datetime, timezone
+import os
 from typing import Any
 
-from .companies_house_rest import CompaniesHouseREST
-from .database import connection
+import requests
+
+from .screening import TARGET_COUNTRIES, normalize_text
 
 
-def parse_company_number(payload: dict[str, Any]) -> str | None:
-    return payload.get("resource_id") or payload.get("data", {}).get("company_number")
+def parse_company_number(value: str) -> str:
+    return str(value).strip().upper()
 
 
-def enrich_company(company_number: str) -> None:
-    api = CompaniesHouseREST()
-    company = api.company(company_number)
-    officers = api.officers(company_number)
-    try:
-        pscs = api.pscs(company_number)
-    except Exception:
-        pscs = {"items": []}
+def _rest_key() -> str:
+    value = os.getenv("COMPANIES_HOUSE_REST_API_KEY")
+    if not value:
+        raise RuntimeError("COMPANIES_HOUSE_REST_API_KEY is not configured")
+    return value
 
-    now = datetime.now(timezone.utc)
-    with connection() as conn:
-        conn.execute(
-            "update companies set company_name=coalesce(%s, company_name), sic_codes=%s, registered_office=%s, enrichment_status='complete', enrichment_completed_at=%s, updated_at=%s where company_number=%s",
-            (company.get("company_name"), json.dumps(company.get("sic_codes", [])), json.dumps(company.get("registered_office_address", {})), now, now, company_number),
+
+def _base_url() -> str:
+    return os.getenv(
+        "REST_BASE_URL",
+        "https://api.company-information.service.gov.uk",
+    ).rstrip("/")
+
+
+def get_json(path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+    response = requests.get(
+        f"{_base_url()}{path}",
+        params=params,
+        auth=(_rest_key(), ""),
+        headers={"Accept": "application/json"},
+        timeout=30,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def get_company_profile(company_number: str) -> dict[str, Any]:
+    return get_json(f"/company/{parse_company_number(company_number)}")
+
+
+def get_officers(company_number: str) -> dict[str, Any]:
+    return get_json(f"/company/{parse_company_number(company_number)}/officers")
+
+
+def get_pscs(company_number: str) -> dict[str, Any]:
+    return get_json(f"/company/{parse_company_number(company_number)}/persons-with-significant-control")
+
+
+def _country_matches(value: Any) -> bool:
+    candidate = normalize_text(value)
+    return any(normalize_text(country) in candidate for country in TARGET_COUNTRIES)
+
+
+def evaluate_restricted_company(
+    company_number: str,
+    profile: dict[str, Any],
+    officers: dict[str, Any],
+    pscs: dict[str, Any],
+) -> dict[str, Any]:
+    matching_directors: list[dict[str, Any]] = []
+    for officer in officers.get("items") or []:
+        officer_address = officer.get("address") or {}
+        country = officer_address.get("country") or officer_address.get("locality")
+        if officer.get("officer_role") in {"director", "corporate-director"} and _country_matches(country):
+            matching_directors.append(
+                {
+                    "name": officer.get("name"),
+                    "role": officer.get("officer_role"),
+                    "appointed_on": officer.get("appointed_on"),
+                    "country": country,
+                }
+            )
+
+    matching_corporate_owners: list[dict[str, Any]] = []
+    for psc in pscs.get("items") or []:
+        identification = psc.get("identification") or {}
+        address = psc.get("address") or {}
+        country = (
+            identification.get("country_registered")
+            or address.get("country")
+            or address.get("locality")
         )
-        for item in officers.get("items", []):
-            key = hashlib.sha256(json.dumps(item, sort_keys=True).encode()).hexdigest()
-            address = item.get("address", {}) or {}
-            conn.execute(
-                "insert into officers(officer_key,name,nationality,country_of_residence,address_country,raw_data) values(%s,%s,%s,%s,%s,%s) on conflict(officer_key) do update set raw_data=excluded.raw_data, updated_at=now()",
-                (key, item.get("name"), item.get("nationality"), item.get("country_of_residence"), address.get("country"), json.dumps(item)),
+        kind = normalize_text(psc.get("kind"))
+        if "corporate" in kind and _country_matches(country):
+            matching_corporate_owners.append(
+                {
+                    "name": psc.get("name"),
+                    "kind": psc.get("kind"),
+                    "country": country,
+                    "natures_of_control": psc.get("natures_of_control") or [],
+                }
+            )
+
+    qualified = bool(matching_directors or matching_corporate_owners)
+    return {
+        "company_number": company_number,
+        "qualified": qualified,
+        "matching_directors": matching_directors,
+        "matching_corporate_owners": matching_corporate_owners,
+        "evidence": {
+            "profile": profile,
+            "directors": matching_directors,
+            "corporate_owners": matching_corporate_owners,
+        },
+    }
+
+
+def enrich_and_evaluate(company_number: str) -> dict[str, Any]:
+    profile = get_company_profile(company_number)
+    officers = get_officers(company_number)
+    pscs = get_pscs(company_number)
+    return evaluate_restricted_company(company_number, profile, officers, pscs)
             )
             conn.execute(
                 "insert into company_officers(company_number,officer_key,role,appointed_on,resigned_on,raw_data) values(%s,%s,%s,%s,%s,%s) on conflict(company_number,officer_key) do update set raw_data=excluded.raw_data",
