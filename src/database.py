@@ -1,4 +1,4 @@
-"""PostgreSQL access for Thanos."""
+"""Database helpers used by both the Streamlit app and worker."""
 
 from __future__ import annotations
 
@@ -17,8 +17,7 @@ def _database_url() -> str:
     return value
 
 
-def get_connection() -> psycopg.Connection:
-    """Open a connection using the Supabase PostgreSQL connection string."""
+def connection() -> psycopg.Connection:
     return psycopg.connect(
         _database_url(),
         row_factory=dict_row,
@@ -26,27 +25,25 @@ def get_connection() -> psycopg.Connection:
     )
 
 
-def fetch_all(sql: str, params: Iterable[Any] | Mapping[str, Any] | None = None) -> list[dict[str, Any]]:
-    """Execute a read-only query and return dictionaries."""
-    with get_connection() as conn:
-        try:
-            with conn.cursor() as cursor:
-                cursor.execute(sql, params)
-                return list(cursor.fetchall())
-        except psycopg.Error as exc:
-            detail = getattr(exc, "diag", None)
-            relation = getattr(detail, "table_name", None) if detail else None
-            hint = getattr(detail, "message_detail", None) if detail else None
-            raise RuntimeError(
-                "Supabase query failed; "
-                f"sqlstate={getattr(exc, 'sqlstate', None)}, "
-                f"relation={relation}, detail={hint or exc}"
-            ) from exc
+def get_connection() -> psycopg.Connection:
+    return connection()
 
 
-def fetch_one(sql: str, params: Iterable[Any] | Mapping[str, Any] | None = None) -> dict[str, Any] | None:
-    """Execute a read-only query and return one dictionary or None."""
-    with get_connection() as conn:
-        with conn.cursor() as cursor:
-            cursor.execute(sql, params)
-            return cursor.fetchone()
+def fetch_all(
+    sql: str,
+    params: Iterable[Any] | Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    with connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+            return list(cur.fetchall())
+
+
+def fetch_one(
+    sql: str,
+    params: Iterable[Any] | Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    with connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+            return cur.fetchone()
