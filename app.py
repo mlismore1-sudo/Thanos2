@@ -7,7 +7,6 @@ st.set_page_config(page_title="Thanos Leads", layout="wide")
 st.title("Thanos — Companies House Lead Screening")
 
 try:
-    from src.auth import login
     from src.config import BUZZWORDS, RESTRICTED_SIC_CODES, TARGET_COUNTRIES
     from src.database import fetch_all, fetch_one
 except Exception as exc:
@@ -82,10 +81,6 @@ def show_shortlist() -> None:
 
 
 def main() -> None:
-    if not login():
-        return
-
-    st.caption(f"Signed in as {st.session_state.get('user')}")
     tabs = st.tabs(["Leads", "Worker", "Shortlist", "Rules"])
 
     with tabs[0]:
