@@ -9,28 +9,46 @@ st.title("Thanos — Companies House Lead Screening")
 try:
     from src.config import BUZZWORDS, RESTRICTED_SIC_CODES, TARGET_COUNTRIES
     from src.database import fetch_all, fetch_one
+    from src.worker import start_worker
 except Exception as exc:
     st.error("The application could not load its Python modules.")
     st.exception(exc)
     st.stop()
 
+if st.button("Start background worker", type="primary"):
+    st.session_state["worker_requested"] = True
+
+if st.session_state.get("worker_requested"):
+    try:
+        start_worker()
+        st.success("Background worker started or is already running.")
+    except Exception as exc:
+        st.error("The worker could not start.")
+        st.exception(exc)
+
 
 def show_worker_status() -> None:
     st.subheader("Worker status")
     try:
-        row = fetch_one("select * from worker_status where worker_name='company_stream_worker'")
+        row = fetch_one(
+            "select * from worker_status "
+            "where worker_name='company_stream_worker'"
+        )
     except Exception as exc:
         st.error("The database connection could not be tested.")
         st.exception(exc)
         return
+
     if not row:
-        st.info("Worker has not reported status yet")
+        st.info("Worker has not reported status yet.")
         return
+
     cols = st.columns(4)
     cols[0].metric("Status", row.get("status", "-"))
     cols[1].metric("Heartbeat", str(row.get("heartbeat_at") or "-"))
     cols[2].metric("Queue depth", row.get("queue_depth", 0))
     cols[3].metric("Events committed", row.get("events_committed", 0))
+
     if row.get("last_error"):
         st.warning(row["last_error"])
 
@@ -39,20 +57,29 @@ def show_leads() -> None:
     st.subheader("Leads")
     try:
         rows = fetch_all(
-            "select company_number, company_name, sic_codes, enrichment_status, first_seen_at, enrichment_completed_at "
+            "select company_number, company_name, sic_codes, "
+            "enrichment_status, first_seen_at, enrichment_completed_at "
             "from companies order by first_seen_at desc limit 500"
         )
     except Exception as exc:
         st.error("The database connection could not be tested.")
         st.exception(exc)
         return
+
     if not rows:
-        st.info("No companies received yet")
+        st.info("No companies received yet.")
         return
+
     df = pd.DataFrame(rows)
     term = st.text_input("Filter company name")
+
     if term:
-        df = df[df["company_name"].str.contains(term, case=False, na=False)]
+        df = df[
+            df["company_name"].str.contains(
+                term, case=False, na=False
+            )
+        ]
+
     st.dataframe(df, use_container_width=True, hide_index=True)
     st.download_button(
         "Export CSV",
@@ -74,10 +101,15 @@ def show_shortlist() -> None:
         st.error("The database connection could not be tested.")
         st.exception(exc)
         return
+
     if rows:
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        st.dataframe(
+            pd.DataFrame(rows),
+            use_container_width=True,
+            hide_index=True,
+        )
     else:
-        st.info("No shortlisted companies")
+        st.info("No shortlisted companies.")
 
 
 def main() -> None:
@@ -85,15 +117,24 @@ def main() -> None:
 
     with tabs[0]:
         show_leads()
+
     with tabs[1]:
         show_worker_status()
+
     with tabs[2]:
         show_shortlist()
+
     with tabs[3]:
         st.write("Buzzwords")
         st.code("\n".join(BUZZWORDS))
-        st.write(f"Restricted SIC codes configured: {len(RESTRICTED_SIC_CODES)}")
-        st.write(f"Target countries configured: {len(TARGET_COUNTRIES)}")
+        st.write(
+            f"Restricted SIC codes configured: "
+            f"{len(RESTRICTED_SIC_CODES)}"
+        )
+        st.write(
+            f"Target countries configured: "
+            f"{len(TARGET_COUNTRIES)}"
+        )
 
 
 if __name__ == "__main__":
