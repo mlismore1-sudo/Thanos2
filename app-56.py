@@ -1,16 +1,11 @@
 from __future__ import annotations
 
-import os
-
 import pandas as pd
 import streamlit as st
 
 st.set_page_config(page_title="Thanos Leads", layout="wide")
-
 st.title("Thanos — Companies House Lead Screening")
 
-# Import after the page has been initialised so deployment failures are visible
-# in the app rather than appearing as an unexplained startup hang.
 try:
     from src.auth import login
     from src.config import BUZZWORDS, RESTRICTED_SIC_CODES, TARGET_COUNTRIES
@@ -18,7 +13,6 @@ try:
 except Exception as exc:
     st.error("The application could not load its Python modules.")
     st.exception(exc)
-    st.info("Check requirements.txt and the config/ folder, then reboot the app.")
     st.stop()
 
 
@@ -46,7 +40,8 @@ def show_leads() -> None:
     st.subheader("Leads")
     try:
         rows = fetch_all(
-            "select company_number, company_name, sic_codes, enrichment_status, first_seen_at, enrichment_completed_at from companies order by first_seen_at desc limit 500"
+            "select company_number, company_name, sic_codes, enrichment_status, first_seen_at, enrichment_completed_at "
+            "from companies order by first_seen_at desc limit 500"
         )
     except Exception as exc:
         st.error("The database connection could not be tested.")
@@ -60,14 +55,21 @@ def show_leads() -> None:
     if term:
         df = df[df["company_name"].str.contains(term, case=False, na=False)]
     st.dataframe(df, use_container_width=True, hide_index=True)
-    st.download_button("Export CSV", df.to_csv(index=False).encode("utf-8"), "thanos_leads.csv", "text/csv")
+    st.download_button(
+        "Export CSV",
+        df.to_csv(index=False).encode("utf-8"),
+        "thanos_leads.csv",
+        "text/csv",
+    )
 
 
 def show_shortlist() -> None:
     st.subheader("Shortlist")
     try:
         rows = fetch_all(
-            "select s.*, c.company_name from shortlist s join companies c using(company_number) order by s.updated_at desc"
+            "select s.*, c.company_name "
+            "from shortlist s join companies c using(company_number) "
+            "order by s.updated_at desc"
         )
     except Exception as exc:
         st.error("The database connection could not be tested.")
@@ -96,55 +98,6 @@ def main() -> None:
         st.write("Buzzwords")
         st.code("\n".join(BUZZWORDS))
         st.write(f"Restricted SIC codes configured: {len(RESTRICTED_SIC_CODES)}")
-        st.write(f"Target countries configured: {len(TARGET_COUNTRIES)}")
-
-
-if __name__ == "__main__":
-    main()
-               c.first_seen_at, c.enrichment_completed_at,
-               exists(select 1 from company_officers co join officers o using(officer_key)
-                      where co.company_number=c.company_number
-                      and (o.nationality = any(%s) or o.country_of_residence = any(%s)
-                           or o.address_country = any(%s))) as target_director,
-               exists(select 1 from company_pscs cp join psc_entities p using(psc_key)
-                      where cp.company_number=c.company_number
-                      and p.kind in ('corporate-entity','corporate_entity','legal-person')) as corporate_owner
-        from companies c order by c.first_seen_at desc limit 500
-    """, (list(TARGET_COUNTRIES), list(TARGET_COUNTRIES), list(TARGET_COUNTRIES)))
-    if not rows:
-        st.info("No companies received yet")
-        return
-    df = pd.DataFrame(rows)
-    term = st.text_input("Filter company name")
-    if term:
-        df = df[df["company_name"].str.contains(term, case=False, na=False)]
-    st.dataframe(df, use_container_width=True, hide_index=True)
-    st.download_button("Export CSV", df.to_csv(index=False).encode("utf-8"), "thanos_leads.csv", "text/csv")
-
-
-def show_shortlist():
-    st.subheader("Shortlist")
-    rows = fetch_all("select s.*, c.company_name from shortlist s join companies c using(company_number) order by s.updated_at desc")
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True) if rows else st.info("No shortlisted companies")
-
-
-def main():
-    if not login():
-        return
-    start_worker()
-    st.title("Thanos — Companies House Lead Screening")
-    st.caption(f"Signed in as {st.session_state.get('user')}")
-    tabs = st.tabs(["Leads", "Worker", "Shortlist", "Rules"])
-    with tabs[0]:
-        show_leads()
-    with tabs[1]:
-        show_worker_status()
-    with tabs[2]:
-        show_shortlist()
-    with tabs[3]:
-        st.write("Buzzwords")
-        st.code("\n".join(BUZZWORDS))
-        st.write(f"Restricted SIC codes: {len(RESTRICTED_SIC_CODES)}")
         st.write(f"Target countries configured: {len(TARGET_COUNTRIES)}")
 
 
