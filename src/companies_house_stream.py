@@ -26,8 +26,8 @@ class CompaniesHouseStream:
         params = {} if timepoint is None else {"timepoint": timepoint}
         headers = {"Accept": "application/json"}
 
-        logger.info(
-            "Connecting to Companies House stream url=%s timepoint=%s",
+        logger.warning(
+            "Companies House stream connecting url=%s timepoint=%s",
             self.url,
             timepoint,
         )
@@ -40,7 +40,7 @@ class CompaniesHouseStream:
             stream=True,
             timeout=(30, 300),
         ) as response:
-            logger.info(
+            logger.warning(
                 "Companies House stream response status=%s url=%s",
                 response.status_code,
                 response.url,
@@ -56,7 +56,13 @@ class CompaniesHouseStream:
                 ).hexdigest()
                 yield payload, digest
 
-    def run_forever(self, callback, checkpoint_loader, checkpoint_saver, heartbeat=None) -> None:
+    def run_forever(
+        self,
+        callback,
+        checkpoint_loader,
+        checkpoint_saver,
+        heartbeat=None,
+    ) -> None:
         backoff = 2
 
         while True:
