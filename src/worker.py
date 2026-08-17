@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import threading
@@ -8,10 +7,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-from .companies_house_stream import CompaniesHouseStream
 from .database import connection, fetch_one
-from .enrichment import parse_company_number
-from .screening import normalize_text, whole_token_matches, sic_matches
 
 WORKER_NAME = "company_stream_worker"
 _worker_lock = threading.Lock()
@@ -24,7 +20,7 @@ def now() -> datetime:
 
 def get_checkpoint() -> int | None:
     row = fetch_one(
-        "select timepoint from stream_checkpoints "
+        "select timepoint from public.stream_checkpoints "
         "where stream_name = 'companies'"
     )
     if row and row.get("timepoint") is not None:
@@ -36,7 +32,7 @@ def set_status(status: str, error: str | None = None) -> None:
     timestamp = now()
     with connection() as conn:
         conn.execute(
-            "insert into worker_status "
+            "insert into public.worker_status "
             "(worker_name, process_id, status, heartbeat_at, last_error, updated_at) "
             "values (%s, %s, %s, %s, %s, %s) "
             "on conflict (worker_name) do update set "
@@ -52,7 +48,7 @@ def save_checkpoint(timepoint: int) -> None:
     timestamp = now()
     with connection() as conn:
         conn.execute(
-            "insert into stream_checkpoints "
+            "insert into public.stream_checkpoints "
             "(stream_name, timepoint, connection_status, last_event_at, "
             "last_heartbeat_at, updated_at) "
             "values ('companies', %s, 'connected', %s, %s, %s) "
@@ -66,6 +62,12 @@ def save_checkpoint(timepoint: int) -> None:
         conn.commit()
 
 
+def _load_stream_class():
+    from .companies_house_stream import CompaniesHouseStream
+
+    return CompaniesHouseStream
+
+
 def extract_company(payload: dict[str, Any]) -> tuple[str | None, dict[str, Any]]:
     data = payload.get("data") or {}
     resource = payload.get("resource") or {}
@@ -77,17 +79,6 @@ def extract_company(payload: dict[str, Any]) -> tuple[str | None, dict[str, Any]
     return company_number, data or resource
 
 
-def _json(value: Any) -> str:
-    return json.dumps(value, default=str)
-
-
-def _date_value(data: dict[str, Any]) -> str | None:
-    value = data.get("date_of_creation")
-    if value is None:
-        return None
-    return str(value)[:10]
-
-
 def process_event(payload: dict[str, Any], event_hash: str) -> None:
     event = payload.get("event") or {}
     company_number, data = extract_company(payload)
@@ -96,22 +87,19 @@ def process_event(payload: dict[str, Any], event_hash: str) -> None:
 
     name = data.get("company_name") or company_number
     sic_codes = data.get("sic_codes") or []
-    date_of_creation = _date_value(data)
+    date_of_creation = data.get("date_of_creation")
     timestamp = now()
 
     with connection() as conn:
-        inserted = conn.execute(
-            "insert into raw_events "
+        conn.execute(
+            "insert into public.raw_events "
             "(event_type, company_number, payload, received_at) "
-            "values (%s, %s, %s, %s) returning id",
-            (event.get("type"), company_number, _json(payload), timestamp),
-        ).fetchone()
-
-        if not inserted:
-            return
+            "values (%s, %s, %s, %s)",
+            (event.get("type"), company_number, json.dumps(payload, default=str), timestamp),
+        )
 
         conn.execute(
-            "insert into companies "
+            "insert into public.companies "
             "(company_number, company_name, date_of_creation, sic_codes, "
             "raw_data, first_seen_at, last_seen_at, last_screened_at) "
             "values (%s, %s, %s, %s, %s, %s, %s, %s) "
@@ -126,8 +114,8 @@ def process_event(payload: dict[str, Any], event_hash: str) -> None:
                 company_number,
                 name,
                 date_of_creation,
-                _json(sic_codes),
-                _json(data),
+                json.dumps(sic_codes, default=str),
+                json.dumps(data, default=str),
                 timestamp,
                 timestamp,
                 timestamp,
@@ -135,17 +123,22 @@ def process_event(payload: dict[str, Any], event_hash: str) -> None:
         )
 
         conn.execute(
-            "insert into enrichment_jobs (company_number, enrichment_scope) "
-            "values (%s, 'initial_rest') "
-            "on conflict (company_number) where enrichment_scope = 'initial_rest' do nothing",
+            "insert into public.enrichment_jobs "
+            "(company_number, enrichment_scope) values (%s, 'initial_rest') "
+            "on conflict (company_number, enrichment_scope) do nothing",
             (company_number,),
         )
-
         conn.commit()
 
 
 def stream_loop() -> None:
     backoff = 5
+    try:
+        CompaniesHouseStream = _load_stream_class()
+    except Exception as exc:
+        set_status("degraded", f"Stream import/configuration error: {exc}")
+        return
+
     while True:
         try:
             set_status("connecting")
@@ -154,10 +147,10 @@ def stream_loop() -> None:
                 get_checkpoint,
                 save_checkpoint,
             )
-            backoff = 5
         except Exception as exc:
+            error_text = f"{type(exc).__name__}: {exc}"
             try:
-                set_status("degraded", str(exc)[:1000])
+                set_status("degraded", error_text[:1000])
             except Exception:
                 pass
             time.sleep(backoff)
