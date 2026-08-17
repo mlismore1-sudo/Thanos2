@@ -62,12 +62,6 @@ def save_checkpoint(timepoint: int) -> None:
         conn.commit()
 
 
-def _load_stream_class():
-    from .companies_house_stream import CompaniesHouseStream
-
-    return CompaniesHouseStream
-
-
 def extract_company(payload: dict[str, Any]) -> tuple[str | None, dict[str, Any]]:
     data = payload.get("data") or {}
     resource = payload.get("resource") or {}
@@ -95,7 +89,12 @@ def process_event(payload: dict[str, Any], event_hash: str) -> None:
             "insert into public.raw_events "
             "(event_type, company_number, payload, received_at) "
             "values (%s, %s, %s, %s)",
-            (event.get("type"), company_number, json.dumps(payload, default=str), timestamp),
+            (
+                event.get("type"),
+                company_number,
+                json.dumps(payload, default=str),
+                timestamp,
+            ),
         )
 
         conn.execute(
@@ -124,7 +123,8 @@ def process_event(payload: dict[str, Any], event_hash: str) -> None:
 
         conn.execute(
             "insert into public.enrichment_jobs "
-            "(company_number, enrichment_scope) values (%s, 'initial_rest') "
+            "(company_number, enrichment_scope) "
+            "values (%s, 'initial_rest') "
             "on conflict (company_number, enrichment_scope) do nothing",
             (company_number,),
         )
@@ -133,8 +133,9 @@ def process_event(payload: dict[str, Any], event_hash: str) -> None:
 
 def stream_loop() -> None:
     backoff = 5
+
     try:
-        CompaniesHouseStream = _load_stream_class()
+        from .companies_house_stream import CompaniesHouseStream
     except Exception as exc:
         set_status("degraded", f"Stream import/configuration error: {exc}")
         return
@@ -142,10 +143,12 @@ def stream_loop() -> None:
     while True:
         try:
             set_status("connecting")
-            CompaniesHouseStream().run_forever(
+            stream = CompaniesHouseStream()
+            stream.run_forever(
                 process_event,
                 get_checkpoint,
                 save_checkpoint,
+                set_status,
             )
         except Exception as exc:
             error_text = f"{type(exc).__name__}: {exc}"
