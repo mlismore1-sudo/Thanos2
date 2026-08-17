@@ -36,15 +36,8 @@ def worker_health() -> tuple[str, dict[str, Any] | None]:
     try:
         row = fetch_one(
             """
-            select
-                worker_name,
-                status,
-                heartbeat_at,
-                last_event_at,
-                events_received,
-                events_committed,
-                last_error,
-                updated_at
+            select worker_name, status, heartbeat_at, last_event_at,
+                   events_received, events_committed, last_error, updated_at
             from public.worker_status
             where worker_name = %s
             """,
@@ -70,7 +63,7 @@ def worker_health() -> tuple[str, dict[str, Any] | None]:
 def health_panel() -> None:
     st.subheader("System health")
     db_ok, db_message = database_health()
-    worker_status, worker_row = worker_health()
+    current_worker_status, worker_row = worker_health()
 
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -78,12 +71,12 @@ def health_panel() -> None:
         if not db_ok:
             st.caption(db_message)
     with col2:
-        st.metric("Worker", worker_status)
+        st.metric("Worker", current_worker_status)
     with col3:
-        if worker_row:
-            st.metric("Events committed", worker_row.get("events_committed", 0))
-        else:
-            st.metric("Events committed", 0)
+        st.metric(
+            "Events committed",
+            worker_row.get("events_committed", 0) if worker_row else 0,
+        )
 
     if worker_row and worker_row.get("last_error"):
         st.warning(f"Worker error: {worker_row['last_error']}")
@@ -169,51 +162,6 @@ def main() -> None:
     st.title("Thanos dashboard")
     health_panel()
     worker_controls()
-    show_leads()
-
-
-if __name__ == "__main__":
-    main()
-                lead_status,
-                matched_buzzwords,
-                matched_sic_codes,
-                incorporated_today,
-                first_seen_at,
-                last_seen_at
-            from public.qualifying_leads
-            order by first_seen_at desc
-            """
-        )
-    except Exception as exc:
-        st.error("The application could not read the lead view from Supabase.")
-        st.code(str(exc))
-        return
-
-    if not rows:
-        st.info("No qualifying leads have been recorded yet.")
-        return
-
-    st.metric("Qualifying leads", len(rows))
-
-    for row in rows:
-        company_number = row.get("company_number", "")
-        company_name = row.get("company_name", "Unnamed company")
-        with st.expander(f"{company_name} ({company_number})"):
-            left, right = st.columns(2)
-            with left:
-                st.write(f"**Company number:** {display_value(company_number)}")
-                st.write(f"**Incorporated:** {display_value(row.get('date_of_creation'))}")
-                st.write(f"**Status:** {display_value(row.get('company_status'))}")
-                st.write(f"**Lead status:** {display_value(row.get('lead_status'))}")
-                st.write(f"**Enrichment:** {display_value(row.get('enrichment_status'))}")
-            with right:
-                st.write(f"**SIC matches:** {display_value(row.get('matched_sic_codes'))}")
-                st.write(f"**Buzzword matches:** {display_value(row.get('matched_buzzwords'))}")
-                st.write(f"**Address:** {display_value(row.get('registered_office_address'))}")
-                st.write(f"**First seen:** {display_value(row.get('first_seen_at'))}")
-
-
-def main() -> None:
     show_leads()
 
 
