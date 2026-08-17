@@ -1,19 +1,12 @@
-"""Thanos Streamlit application.
-
-This file is deliberately self-contained and uses the database view
-public.qualifying_leads created by the consolidated Supabase schema.
-"""
+"""Thanos Streamlit application."""
 
 from __future__ import annotations
 
-import os
-from datetime import date, datetime
 from typing import Any
 
 import streamlit as st
 
 from src.database import fetch_all
-
 
 st.set_page_config(page_title="Thanos Leads", page_icon="🎯", layout="wide")
 
@@ -27,7 +20,9 @@ def display_value(value: Any) -> str:
 
 
 def show_leads() -> None:
-    """Display only companies that the worker has marked as qualifying leads."""
+    st.title("Thanos qualifying leads")
+    st.caption("Companies marked as leads and incorporated today in Europe/London.")
+
     try:
         rows = fetch_all(
             """
@@ -50,16 +45,9 @@ def show_leads() -> None:
             """
         )
     except Exception as exc:
-        st.error("The application could not read qualifying_leads from Supabase.")
+        st.error("The application could not read the lead view from Supabase.")
         st.code(str(exc))
-        st.info(
-            "Confirm that the consolidated SQL was run in the same Supabase project "
-            "used by DATABASE_URL, and that the view public.qualifying_leads exists."
-        )
         return
-
-    st.title("Thanos qualifying leads")
-    st.caption("Companies marked as leads and incorporated today in Europe/London.")
 
     if not rows:
         st.info("No qualifying leads have been recorded yet.")
@@ -70,7 +58,7 @@ def show_leads() -> None:
     for row in rows:
         company_number = row.get("company_number", "")
         company_name = row.get("company_name", "Unnamed company")
-        with st.expander(f"{company_name} ({company_number})", expanded=False):
+        with st.expander(f"{company_name} ({company_number})"):
             left, right = st.columns(2)
             with left:
                 st.write(f"**Company number:** {display_value(company_number)}")
