@@ -1,4 +1,4 @@
-"""Database helpers used by both the Streamlit app and worker."""
+"""PostgreSQL helpers used by the Thanos app and worker."""
 
 from __future__ import annotations
 
@@ -22,6 +22,10 @@ def connection() -> psycopg.Connection:
         _database_url(),
         row_factory=dict_row,
         connect_timeout=15,
+        keepalives=1,
+        keepalives_idle=30,
+        keepalives_interval=10,
+        keepalives_count=3,
     )
 
 
