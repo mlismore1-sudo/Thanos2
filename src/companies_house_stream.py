@@ -9,7 +9,6 @@ from typing import Any, Iterator
 
 import requests
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -73,26 +72,22 @@ class CompaniesHouseStream:
                 response = exc.response
                 status = response.status_code if response is not None else "unknown"
                 body = response.text[:500] if response is not None else ""
-                message = f"Companies House HTTP {status}: {body}"
-                logger.exception(message)
-                raise RuntimeError(message) from exc
-            except requests.RequestException as exc:
-                logger.exception("Companies House network error: %s", exc)
-                raise RuntimeError(f"Companies House network error: {exc}") from exc
-            except json.JSONDecodeError as exc:
-                logger.exception("Invalid JSON received from Companies House: %s", exc)
-                raise RuntimeError(f"Invalid JSON from Companies House: {exc}") from exc
-            except Exception as exc:
-                logger.exception("Companies House stream error: %s", exc)
-                raise RuntimeError(f"Companies House stream error: {exc}") from exc
-            finally:
+                logger.exception(
+                    "Companies House HTTP %s: %s",
+                    status,
+                    body,
+                )
                 time.sleep(backoff)
                 backoff = min(backoff * 2, 300)
-                    callback(payload, digest)
-                    event = payload.get("event", {})
-                    if event.get("timepoint") is not None:
-                        checkpoint_saver(int(event["timepoint"]))
-                    backoff = 2
-            except Exception:
+            except requests.RequestException as exc:
+                logger.exception("Companies House network error: %s", exc)
+                time.sleep(backoff)
+                backoff = min(backoff * 2, 300)
+            except json.JSONDecodeError as exc:
+                logger.exception("Invalid JSON from Companies House: %s", exc)
+                time.sleep(backoff)
+                backoff = min(backoff * 2, 300)
+            except Exception as exc:
+                logger.exception("Companies House stream error: %s", exc)
                 time.sleep(backoff)
                 backoff = min(backoff * 2, 300)
