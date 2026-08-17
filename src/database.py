@@ -1,33 +1,52 @@
+"""PostgreSQL access for Thanos."""
+
 from __future__ import annotations
 
 import os
-from contextlib import contextmanager
-from typing import Iterator
+from collections.abc import Iterable, Mapping
+from typing import Any
 
 import psycopg
 from psycopg.rows import dict_row
 
 
-@contextmanager
-def connection() -> Iterator[psycopg.Connection]:
-    url = os.getenv("DATABASE_URL")
-    if not url:
+def _database_url() -> str:
+    value = os.getenv("DATABASE_URL")
+    if not value:
         raise RuntimeError("DATABASE_URL is not configured")
-    with psycopg.connect(url, row_factory=dict_row) as conn:
-        yield conn
+    return value
 
 
-def execute(sql: str, params: tuple | dict = ()) -> None:
-    with connection() as conn:
-        conn.execute(sql, params)
-        conn.commit()
+def get_connection() -> psycopg.Connection:
+    """Open a connection using the Supabase PostgreSQL connection string."""
+    return psycopg.connect(
+        _database_url(),
+        row_factory=dict_row,
+        connect_timeout=15,
+    )
 
 
-def fetch_all(sql: str, params: tuple | dict = ()) -> list[dict]:
-    with connection() as conn:
-        return list(conn.execute(sql, params).fetchall())
+def fetch_all(sql: str, params: Iterable[Any] | Mapping[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Execute a read-only query and return dictionaries."""
+    with get_connection() as conn:
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(sql, params)
+                return list(cursor.fetchall())
+        except psycopg.Error as exc:
+            detail = getattr(exc, "diag", None)
+            relation = getattr(detail, "table_name", None) if detail else None
+            hint = getattr(detail, "message_detail", None) if detail else None
+            raise RuntimeError(
+                "Supabase query failed; "
+                f"sqlstate={getattr(exc, 'sqlstate', None)}, "
+                f"relation={relation}, detail={hint or exc}"
+            ) from exc
 
 
-def fetch_one(sql: str, params: tuple | dict = ()) -> dict | None:
-    with connection() as conn:
-        return conn.execute(sql, params).fetchone()
+def fetch_one(sql: str, params: Iterable[Any] | Mapping[str, Any] | None = None) -> dict[str, Any] | None:
+    """Execute a read-only query and return one dictionary or None."""
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(sql, params)
+            return cursor.fetchone()
