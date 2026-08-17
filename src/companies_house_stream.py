@@ -56,7 +56,7 @@ class CompaniesHouseStream:
                 ).hexdigest()
                 yield payload, digest
 
-    def run_forever(self, callback, checkpoint_loader, checkpoint_saver) -> None:
+    def run_forever(self, callback, checkpoint_loader, checkpoint_saver, heartbeat=None) -> None:
         backoff = 2
 
         while True:
@@ -67,27 +67,41 @@ class CompaniesHouseStream:
                     event = payload.get("event") or {}
                     if event.get("timepoint") is not None:
                         checkpoint_saver(int(event["timepoint"]))
+                    if heartbeat:
+                        heartbeat("connected")
                     backoff = 2
+
             except requests.HTTPError as exc:
                 response = exc.response
                 status = response.status_code if response is not None else "unknown"
                 body = response.text[:500] if response is not None else ""
-                logger.exception(
-                    "Companies House HTTP %s: %s",
-                    status,
-                    body,
-                )
+                message = f"Companies House HTTP {status}: {body}"
+                logger.exception(message)
+                if heartbeat:
+                    heartbeat("degraded", message[:1000])
                 time.sleep(backoff)
                 backoff = min(backoff * 2, 300)
+
             except requests.RequestException as exc:
-                logger.exception("Companies House network error: %s", exc)
+                message = f"Companies House network error: {exc}"
+                logger.exception(message)
+                if heartbeat:
+                    heartbeat("degraded", message[:1000])
                 time.sleep(backoff)
                 backoff = min(backoff * 2, 300)
+
             except json.JSONDecodeError as exc:
-                logger.exception("Invalid JSON from Companies House: %s", exc)
+                message = f"Invalid JSON from Companies House: {exc}"
+                logger.exception(message)
+                if heartbeat:
+                    heartbeat("degraded", message[:1000])
                 time.sleep(backoff)
                 backoff = min(backoff * 2, 300)
+
             except Exception as exc:
-                logger.exception("Companies House stream error: %s", exc)
+                message = f"Companies House stream error: {exc}"
+                logger.exception(message)
+                if heartbeat:
+                    heartbeat("degraded", message[:1000])
                 time.sleep(backoff)
                 backoff = min(backoff * 2, 300)
