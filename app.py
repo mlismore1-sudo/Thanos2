@@ -1,140 +1,92 @@
+"""Thanos Streamlit application.
+
+This file is deliberately self-contained and uses the database view
+public.qualifying_leads created by the consolidated Supabase schema.
+"""
+
 from __future__ import annotations
 
-import pandas as pd
+import os
+from datetime import date, datetime
+from typing import Any
+
 import streamlit as st
 
-st.set_page_config(page_title="Thanos Leads", layout="wide")
-st.title("Thanos — Companies House Lead Screening")
-
-try:
-    from src.config import BUZZWORDS, RESTRICTED_SIC_CODES, TARGET_COUNTRIES
-    from src.database import fetch_all, fetch_one
-    from src.worker import start_worker
-except Exception as exc:
-    st.error("The application could not load its Python modules.")
-    st.exception(exc)
-    st.stop()
+from src.database import fetch_all
 
 
-if st.button("Start background worker", type="primary"):
-    try:
-        started = start_worker()
-        if started:
-            st.success("Background worker started.")
-        else:
-            st.info("Background worker is already running.")
-    except Exception as exc:
-        st.error("The background worker could not start.")
-        st.exception(exc)
+st.set_page_config(page_title="Thanos Leads", page_icon="🎯", layout="wide")
 
 
-def show_worker_status() -> None:
-    st.subheader("Worker status")
-    try:
-        row = fetch_one(
-            "select * from worker_status "
-            "where worker_name='company_stream_worker'"
-        )
-    except Exception as exc:
-        st.error("The database connection could not be tested.")
-        st.exception(exc)
-        return
-
-    if not row:
-        st.info("Worker has not reported status yet.")
-        return
-
-    cols = st.columns(4)
-    cols[0].metric("Status", row.get("status", "-"))
-    cols[1].metric("Heartbeat", str(row.get("heartbeat_at") or "-"))
-    cols[2].metric("Events received", row.get("events_received", 0))
-    cols[3].metric("Events committed", row.get("events_committed", 0))
-
-    if row.get("last_error"):
-        st.error(row["last_error"])
+def display_value(value: Any) -> str:
+    if value is None or value == "":
+        return "—"
+    if isinstance(value, (dict, list)):
+        return str(value)
+    return str(value)
 
 
 def show_leads() -> None:
-    st.subheader("Leads")
+    """Display only companies that the worker has marked as qualifying leads."""
     try:
         rows = fetch_all(
-            "select company_number, company_name, sic_codes, "
-            "enrichment_status, first_seen_at, enrichment_completed_at "
-            "from companies order by first_seen_at desc limit 500"
+            """
+            select
+                company_number,
+                company_name,
+                date_of_creation,
+                sic_codes,
+                registered_office_address,
+                company_status,
+                enrichment_status,
+                lead_status,
+                matched_buzzwords,
+                matched_sic_codes,
+                incorporated_today,
+                first_seen_at,
+                last_seen_at
+            from public.qualifying_leads
+            order by first_seen_at desc
+            """
         )
     except Exception as exc:
-        st.error("The database connection could not be tested.")
-        st.exception(exc)
+        st.error("The application could not read qualifying_leads from Supabase.")
+        st.code(str(exc))
+        st.info(
+            "Confirm that the consolidated SQL was run in the same Supabase project "
+            "used by DATABASE_URL, and that the view public.qualifying_leads exists."
+        )
         return
+
+    st.title("Thanos qualifying leads")
+    st.caption("Companies marked as leads and incorporated today in Europe/London.")
 
     if not rows:
-        st.info("No companies received yet.")
+        st.info("No qualifying leads have been recorded yet.")
         return
 
-    df = pd.DataFrame(rows)
-    term = st.text_input("Filter company name")
-    if term:
-        df = df[
-            df["company_name"].str.contains(
-                term, case=False, na=False
-            )
-        ]
+    st.metric("Qualifying leads", len(rows))
 
-    st.dataframe(df, use_container_width=True, hide_index=True)
-    st.download_button(
-        "Export CSV",
-        df.to_csv(index=False).encode("utf-8"),
-        "thanos_leads.csv",
-        "text/csv",
-    )
-
-
-def show_shortlist() -> None:
-    st.subheader("Shortlist")
-    try:
-        rows = fetch_all(
-            "select s.*, c.company_name "
-            "from shortlist s join companies c using(company_number) "
-            "order by s.updated_at desc"
-        )
-    except Exception as exc:
-        st.error("The database connection could not be tested.")
-        st.exception(exc)
-        return
-
-    if rows:
-        st.dataframe(
-            pd.DataFrame(rows),
-            use_container_width=True,
-            hide_index=True,
-        )
-    else:
-        st.info("No shortlisted companies.")
+    for row in rows:
+        company_number = row.get("company_number", "")
+        company_name = row.get("company_name", "Unnamed company")
+        with st.expander(f"{company_name} ({company_number})", expanded=False):
+            left, right = st.columns(2)
+            with left:
+                st.write(f"**Company number:** {display_value(company_number)}")
+                st.write(f"**Incorporated:** {display_value(row.get('date_of_creation'))}")
+                st.write(f"**Status:** {display_value(row.get('company_status'))}")
+                st.write(f"**Lead status:** {display_value(row.get('lead_status'))}")
+                st.write(f"**Enrichment:** {display_value(row.get('enrichment_status'))}")
+            with right:
+                st.write(f"**SIC matches:** {display_value(row.get('matched_sic_codes'))}")
+                st.write(f"**Buzzword matches:** {display_value(row.get('matched_buzzwords'))}")
+                st.write(f"**Address:** {display_value(row.get('registered_office_address'))}")
+                st.write(f"**First seen:** {display_value(row.get('first_seen_at'))}")
 
 
 def main() -> None:
-    tabs = st.tabs(["Leads", "Worker", "Shortlist", "Rules"])
-
-    with tabs[0]:
-        show_leads()
-
-    with tabs[1]:
-        show_worker_status()
-
-    with tabs[2]:
-        show_shortlist()
-
-    with tabs[3]:
-        st.write("Buzzwords")
-        st.code("\n".join(BUZZWORDS))
-        st.write(
-            f"Restricted SIC codes configured: "
-            f"{len(RESTRICTED_SIC_CODES)}"
-        )
-        st.write(
-            f"Target countries configured: "
-            f"{len(TARGET_COUNTRIES)}"
-        )
+    show_leads()
 
 
 if __name__ == "__main__":
